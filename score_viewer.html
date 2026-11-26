@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Isolator Demo — Score Viewer</title>
+<script src="opensheetmusicdisplay.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f6f6; overflow: hidden; }
+  #app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  #header {
+    padding: 10px 16px; background: #1f2937; color: #fff;
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  }
+  #header h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  #status { font-size: 15px; text-align: center; }
+  #status .m { color: #fde047; font-weight: 700; font-size: 17px; }
+  #status .info { margin-left: 10px; opacity: 0.9; }
+  #status .low { color: #f87171; font-weight: 700; margin-left: 8px; }
+  #shortcuts { font-size: 11px; opacity: 0.7; text-align: right; }
+  #shortcuts kbd { background: #374151; padding: 1px 5px; border-radius: 3px; font-family: inherit; }
+
+  #body { display: grid; grid-template-columns: 1fr 260px; min-height: 0; }
+  #score-wrapper { overflow-y: auto; padding: 16px 24px; }
+  #score { background: #fff; padding: 16px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+  #sidebar { background: #fff; border-left: 1px solid #e5e7eb; display: flex; flex-direction: column; min-height: 0; }
+  #sidebar h2 { margin: 0; padding: 10px 12px; font-size: 12px; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #e5e7eb; }
+  #row-list { flex: 1; overflow-y: auto; }
+  .row-item { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; cursor: pointer; font-size: 12px; line-height: 1.4; }
+  .row-item:hover { background: #f9fafb; }
+  .row-item.current { background: #fef3c7; border-left: 3px solid #f59e0b; padding-left: 9px; }
+  .row-item .m { font-weight: 700; color: #1f2937; }
+  .row-item .info { color: #4b5563; }
+  .row-item .low { color: #dc2626; font-weight: 700; }
+
+  .highlight-rect { fill: #fde047; opacity: 0.35; pointer-events: none; }
+  .highlight-rect.note { fill: #f59e0b; opacity: 0.45; }
+  #loading { padding: 40px; text-align: center; color: #6b7280; }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div id="header">
+      <h1 id="title">Score Viewer</h1>
+      <div id="status">At: <span class="m" id="measure-num">—</span><span class="info" id="info"></span></div>
+      <div id="shortcuts">
+        <kbd>Space</kbd> play+next &nbsp;
+        <kbd>←</kbd>/<kbd>→</kbd> nav &nbsp;
+        <kbd>R</kbd> replay &nbsp;
+        <kbd>Esc</kbd> stop
+      </div>
+    </div>
+    <div id="body">
+      <div id="score-wrapper"><div id="score"><div id="loading">Loading score…</div></div></div>
+      <div id="sidebar">
+        <h2 id="sidebar-title">Segments</h2>
+        <div id="row-list"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const UNIT = 10.0; // OSMD units → SVG units
+
+let osmd = null;
+let scoreReady = false;
+let sessionReady = false;
+let sessionData = null;
+let currentIdx = 0;
+let advanceTimer = null;
+
+async function loadScore(xmlPath, title) {
+  document.getElementById('title').textContent = title || 'Score Viewer';
+  osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay("score", {
+    autoResize: true,
+    drawTitle: true,
+    drawSubtitle: false,
+    drawComposer: true,
+    drawPartNames: false,
+    drawPartAbbreviations: false,
+    backend: "svg",
+    pageFormat: "Endless",
+    drawingParameters: "compact",
+  });
+  document.getElementById('score').innerHTML = '';
+  await osmd.load(xmlPath);
+  await osmd.render();
+  scoreReady = true;
+  tryStart();
+  return true;
+}
+
+function clearHighlights() {
+  document.querySelectorAll('.highlight-rect').forEach(el => el.remove());
+}
+
+function findMeasurePage(referenceStaff) {
+  const parentSystem = referenceStaff.ParentMusicSystem || referenceStaff.parentMusicSystem;
+  if (parentSystem) {
+    const page = parentSystem.Parent;
+    if (page && osmd.GraphicSheet.MusicPages) {
+      const idx = osmd.GraphicSheet.MusicPages.indexOf(page);
+      if (idx >= 0) return idx;
+    }
+  }
+  return 0;
+}
+
+function drawAndScroll(referenceStaff, minX, minY, maxX, maxY, cssClass) {
+  const svgs = document.querySelectorAll('#score svg');
+  if (svgs.length === 0) return false;
+
+  const pageIdx = findMeasurePage(referenceStaff);
+  const svg = svgs[Math.min(pageIdx, svgs.length - 1)];
+
+  let pageOffsetY = 0;
+  if (osmd.GraphicSheet.MusicPages && osmd.GraphicSheet.MusicPages[pageIdx]) {
+    pageOffsetY = osmd.GraphicSheet.MusicPages[pageIdx].PositionAndShape.AbsolutePosition.y;
+  }
+
+  const x = minX * UNIT;
+  const y = (minY - pageOffsetY) * UNIT;
+  const w = (maxX - minX) * UNIT;
+  const h = (maxY - minY) * UNIT;
+
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x);
+  rect.setAttribute('y', y);
+  rect.setAttribute('width', w);
+  rect.setAttribute('height', h);
+  rect.setAttribute('class', 'highlight-rect ' + (cssClass || ''));
+  svg.insertBefore(rect, svg.firstChild);
+
+  // Scroll: position of rect's center relative to wrapper's scroll origin
+  const wrapper = document.getElementById('score-wrapper');
+  const rectBox = rect.getBoundingClientRect();
+  const wrapperBox = wrapper.getBoundingClientRect();
+  const rectTopInWrapper = (rectBox.top - wrapperBox.top) + wrapper.scrollTop;
+  const target = rectTopInWrapper - wrapper.clientHeight / 2 + rectBox.height / 2;
+  const maxScroll = wrapper.scrollHeight - wrapper.clientHeight;
+  const clamped = Math.max(0, Math.min(maxScroll, target));
+  wrapper.scrollTo({ top: clamped, behavior: 'smooth' });
+
+  return true;
+}
+
+function measureBounds(staves) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const m of staves) {
+    const pos = m.PositionAndShape.AbsolutePosition;
+    const size = m.PositionAndShape.Size;
+    minX = Math.min(minX, pos.x);
+    minY = Math.min(minY, pos.y);
+    maxX = Math.max(maxX, pos.x + size.width);
+    maxY = Math.max(maxY, pos.y + size.height);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function highlightMeasure(measureNumber) {
+  if (!scoreReady || !osmd) return false;
+  clearHighlights();
+
+  const measureIdx = measureNumber - 1;
+  const measureList = osmd.GraphicSheet.MeasureList;
+  if (measureIdx < 0 || measureIdx >= measureList.length) return false;
+  const staves = measureList[measureIdx].filter(m => m);
+  if (staves.length === 0) return false;
+
+  const b = measureBounds(staves);
+  return drawAndScroll(staves[0], b.minX, b.minY, b.maxX, b.maxY, 'measure');
+}
+
+// Highlight the staff entry within a measure at the given time fraction (0..1).
+// Picks the closest unique attack X to fraction * measureWidth and draws a slot-shaped
+// rect from that X to the next attack X, full measure height (covers both staves).
+function highlightNoteInMeasure(measureNumber, frac) {
+  if (!scoreReady || !osmd) return false;
+  clearHighlights();
+
+  const measureIdx = measureNumber - 1;
+  const measureList = osmd.GraphicSheet.MeasureList;
+  if (measureIdx < 0 || measureIdx >= measureList.length) return false;
+  const staves = measureList[measureIdx].filter(m => m);
+  if (staves.length === 0) return false;
+
+  // Collect unique attack X positions across all staves (sorted)
+  const allX = [];
+  for (const stave of staves) {
+    const seList = stave.staffEntries || [];
+    for (const se of seList) {
+      allX.push(se.PositionAndShape.AbsolutePosition.x);
+    }
+  }
+  if (allX.length === 0) return highlightMeasure(measureNumber);
+  allX.sort((a, b) => a - b);
+  const uniqX = [];
+  for (const x of allX) {
+    const last = uniqX[uniqX.length - 1];
+    if (last === undefined || Math.abs(x - last) > 0.3) uniqX.push(x);
+  }
+  if (uniqX.length === 0) return highlightMeasure(measureNumber);
+
+  const b = measureBounds(staves);
+  const f = Math.max(0, Math.min(0.999, frac || 0));
+  const targetX = b.minX + f * (b.maxX - b.minX);
+
+  // Snap to closest attack X
+  let bestX = uniqX[0];
+  let bestDist = Math.abs(uniqX[0] - targetX);
+  for (const x of uniqX) {
+    const d = Math.abs(x - targetX);
+    if (d < bestDist) { bestDist = d; bestX = x; }
+  }
+  // Width: span to next attack X (or measure end)
+  let nextX = b.maxX;
+  for (const x of uniqX) {
+    if (x > bestX + 0.3) { nextX = x; break; }
+  }
+  const pad = 0.3;
+  return drawAndScroll(staves[0], bestX - pad, b.minY, nextX - pad, b.maxY, 'note');
+}
+
+function renderRowList() {
+  const list = document.getElementById('row-list');
+  list.innerHTML = '';
+  document.getElementById('sidebar-title').textContent =
+    `${sessionData.rows.length} ${sessionData.type === 'measure' ? 'Measures' : 'Notes'}`;
+  sessionData.rows.forEach((r, i) => {
+    const item = document.createElement('div');
+    item.className = 'row-item';
+    item.dataset.idx = i;
+    const low = r.low_conf ? ' <span class="low">LOW</span>' : '';
+    const label = sessionData.type === 'note'
+      ? `m${r.measure}.${r.note_in_measure || '?'}`
+      : `m${r.measure}`;
+    item.innerHTML = `<span class="m">${label}</span> <span class="info">${r.info}</span>${low}`;
+    item.onclick = () => { cancelAdvance(); currentIdx = i; showCurrent(); playCurrent(); };
+    list.appendChild(item);
+  });
+}
+
+function showCurrent() {
+  if (!sessionData) return;
+  const r = sessionData.rows[currentIdx];
+  document.querySelectorAll('.row-item').forEach((el, i) => {
+    el.classList.toggle('current', i === currentIdx);
+  });
+  document.getElementById('info').innerHTML =
+    ` · ${r.info}` + (r.low_conf ? ' <span class="low">LOW</span>' : '');
+  const label = sessionData.type === 'note'
+    ? `m${r.measure}.${r.note_in_measure || '?'}`
+    : `m${r.measure}`;
+  document.getElementById('measure-num').textContent = label;
+
+  if (sessionData.type === 'note') {
+    highlightNoteInMeasure(r.measure, r.frac_in_measure);
+  } else {
+    highlightMeasure(r.measure);
+  }
+
+  const cur = document.querySelector('.row-item.current');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+function cancelAdvance() {
+  if (advanceTimer !== null) { clearTimeout(advanceTimer); advanceTimer = null; }
+}
+
+async function playCurrent() {
+  if (!sessionData || !window.pywebview) return;
+  cancelAdvance();
+  const durationSec = await window.pywebview.api.play_row(currentIdx);
+  if (durationSec && currentIdx < sessionData.rows.length - 1) {
+    advanceTimer = setTimeout(() => {
+      advanceTimer = null;
+      currentIdx++;
+      showCurrent();
+    }, Math.round(durationSec * 1000));
+  }
+}
+
+async function playAndAdvance() {
+  if (!sessionData) return;
+  if (advanceTimer !== null) {
+    cancelAdvance();
+    if (currentIdx < sessionData.rows.length - 1) {
+      currentIdx++;
+      showCurrent();
+    }
+  }
+  await playCurrent();
+}
+
+function next() {
+  if (!sessionData) return;
+  cancelAdvance();
+  if (currentIdx < sessionData.rows.length - 1) { currentIdx++; showCurrent(); }
+}
+function prev() {
+  if (!sessionData) return;
+  cancelAdvance();
+  if (currentIdx > 0) { currentIdx--; showCurrent(); }
+}
+
+function tryStart() {
+  if (scoreReady && sessionReady) {
+    currentIdx = 0;
+    showCurrent();
+  }
+}
+
+async function initSession() {
+  if (!window.pywebview || !window.pywebview.api) return;
+  sessionData = await window.pywebview.api.load_session();
+  sessionReady = true;
+  renderRowList();
+  tryStart();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.code === 'Space' || e.code === 'Enter') {
+    e.preventDefault(); playAndAdvance();
+  } else if (e.code === 'ArrowRight') {
+    e.preventDefault(); next();
+  } else if (e.code === 'ArrowLeft') {
+    e.preventDefault(); prev();
+  } else if (e.code === 'KeyR') {
+    e.preventDefault(); playCurrent();
+  } else if (e.code === 'Escape') {
+    e.preventDefault();
+    cancelAdvance();
+    if (window.pywebview) window.pywebview.api.stop();
+  }
+});
+
+window.addEventListener('pywebviewready', initSession);
+
+window.loadScore = loadScore;
+window.highlightMeasure = highlightMeasure;
+window.highlightNoteInMeasure = highlightNoteInMeasure;
+</script>
+</body>
+</html>
