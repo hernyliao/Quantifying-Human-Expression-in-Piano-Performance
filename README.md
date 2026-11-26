@@ -60,7 +60,6 @@ The paths below use the original Python module names. If downloaded files have u
 | `utils/note_isolator_sm.py` | Simulated/chord-aware matching with backtracking. |
 | `utils/note_isolator_dtw.py` | Note-level DTW alignment. |
 | `utils/play_and_verify.py` | Python bridge between the score viewer, alignment CSVs, and audio playback. |
-| `utils/smoke_test.py` | Viewer diagnostics for readiness, highlighting, and scrolling. |
 | `utils/fix_score_xml.py` | Repair helper for misplaced MusicXML attribute blocks in certain exports. |
 | `viewer/score_viewer.html` | Presentation interface for highlighting and playback. |
 | `viewer/opensheetmusicdisplay.min.js` | Local OpenSheetMusicDisplay dependency for rendering notation. |
