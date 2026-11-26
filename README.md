@@ -188,8 +188,6 @@ Note highlighting uses an approximate position within a measure; it is a visual 
 - The per-piece baseline-fit lookup currently expects a different filename pattern from the generated measure CSVs, so dynamics scoring can fall back to within-recording normalization. The batch cross-piece summary supplies a baseline fit directly when one is present.
 - The XML repair helper has its own path assumptions. Check its `ROOT` and target paths before using it with the `files/<piece>/` layout; it modifies matching scores and creates `.xml.bak` backups.
 
-This README was checked against the supplied source and presentation. Audio recordings, scores, and generated result files were not supplied for this review, so no performance rankings, alignment-accuracy measurements, or end-to-end execution results are claimed here.
-
 ## Reflection and next steps
 
 A central lesson was that meaningful comparisons depend on reliable alignment. Exploring several isolators made the tradeoffs between local matching, error recovery, and global alignment visible before moving to the final measure-based analysis.
